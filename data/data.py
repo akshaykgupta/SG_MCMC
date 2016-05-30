@@ -1,7 +1,7 @@
 import theano
 import numpy as np
 
-from utils import Container
+from SG_MCMC.utils import Container
 
 def get_boston_data(op):
 
