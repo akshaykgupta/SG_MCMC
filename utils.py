@@ -1,15 +1,10 @@
-import os
 import cPickle as pickle
-import numpy as np
 import sys
 import datetime
 import inspect
 from collections import OrderedDict
 
-import theano
-import theano.tensor as T
-from theano.sandbox.rng_mrg import MRG_RandomStreams
-from theano.tensor.shared_randomstreams import RandomStreams
+from theano import tensor
 sys.setrecursionlimit(100000)
 
 
@@ -26,13 +21,13 @@ def cur_timetag():
 
 
 def one_hot(idxs, n_class):
-    onehot = T.zeros((idxs.shape[0], n_class))
-    onehot = T.set_subtensor(onehot[T.arange(idxs.shape[0]), idxs], 1)
+    onehot = tensor.zeros((idxs.shape[0], n_class))
+    onehot = tensor.set_subtensor(onehot[tensor.arange(idxs.shape[0]), idxs], 1)
     return onehot
 
 
 def softmax(X):
-    e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
+    e_x = tensor.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
 
 
@@ -110,23 +105,23 @@ class Container():
 
 def concatenate(tensor_list, axis=0):
     """
-    Alternative implementation of `theano.T.concatenate`.
+    Alternative implementation of `theano.tensor.concatenate`.
     This function does exactly the same thing, but contrary to Theano's own
     implementation, the gradient is implemented on the GPU.
-    Backpropagating through `theano.T.concatenate` yields slowdowns
+    Backpropagating through `theano.tensor.concatenate` yields slowdowns
     because the inverse operation (splitting) needs to be done on the CPU.
     This implementation does not have that problem.
     :usage:
-        >>> x, y = theano.T.matrices('x', 'y')
+        >>> x, y = theano.tensor.matrices('x', 'y')
         >>> c = concatenate([x, y], axis=1)
     :parameters:
         - tensor_list : list
-            list of Theano T expressions that should be concatenated.
+            list of Theano tensor expressions that should be concatenated.
         - axis : int
             the tensors will be joined along this axis.
     :returns:
-        - out : T
-            the concatenated T expression.
+        - out : tensor
+            the concatenated tensor expression.
     """
     concat_size = sum(tt.shape[axis] for tt in tensor_list)
 
@@ -137,7 +132,7 @@ def concatenate(tensor_list, axis=0):
     for k in range(axis + 1, tensor_list[0].ndim):
         output_shape += (tensor_list[0].shape[k],)
 
-    out = T.zeros(output_shape)
+    out = tensor.zeros(output_shape)
     offset = 0
     for tt in tensor_list:
         indices = ()
@@ -147,7 +142,7 @@ def concatenate(tensor_list, axis=0):
         for k in range(axis + 1, tensor_list[0].ndim):
             indices += (slice(None),)
 
-        out = T.set_subtensor(out[indices], tt)
+        out = tensor.set_subtensor(out[indices], tt)
         offset += tt.shape[axis]
 
     return out
