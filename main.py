@@ -7,6 +7,7 @@ import numpy as numpy
 import sys
 
 from utils import Container, tt
+from models import MLP
 
 trng = RandomStreams(1234)
 pi = 3.141592653
@@ -25,6 +26,12 @@ parser.add_argument('--thinning', type = int, default = 10, help = 'sampling int
 
 args = parser.parse_args()
 
+def run(params, data):
+	model_params = Container()
+	model_params.
+	mlp = MLP()
+	mlp.add_layer()
+
 if __name__ == '__main__':
 	params = Container()
 	params.algo = args.algo
@@ -39,6 +46,10 @@ if __name__ == '__main__':
 	params.thinning = args.thinning
 	params.train_size = 456
 	params.val_size = 50
+	params.is_sgd_mode = 0  #don't sample till burnin is complete
 
+	#Testing on boston housing dataset
 	from datasets import boston_housing
-	data = boston_housing.get_data(params)
+	data = boston_housing.get_data('~/Documents/MILA/SG_MCMC/data/housing.data', params) #modify path as necessary
+	run(params, data)
+
