@@ -1,13 +1,13 @@
 import theano
 import numpy as np
 
-from SG_MCMC.utils import Container
+from utils import Container
 
-def get_boston_data(op):
+def get_data(path, op):
 
     dt = Container()
     DT = []
-    with open('housing.data', 'rb') as f:
+    with open(path, 'rb') as f:
         for line in f:
             line = [float(val) for val in line.strip().split()]
             DT.append(line)
@@ -23,10 +23,10 @@ def get_boston_data(op):
     shuffle_idx = np.random.permutation(DT.shape[0])
     DT = DT[shuffle_idx]
 
-    dt.trn_X = DT[:op.trn_sz,:-1]
-    dt.trn_Y = DT[:op.trn_sz,-1]
-    dt.val_X = DT[op.trn_sz:,:-1]
-    dt.val_Y = DT[op.trn_sz:,-1]
+    dt.trn_X = DT[:op.train_size,:-1]
+    dt.trn_Y = DT[:op.train_size,-1]
+    dt.val_X = DT[op.train_size:,:-1]
+    dt.val_Y = DT[op.train_size:,-1]
 
     return dt
 
