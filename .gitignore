@@ -1,1 +1,5 @@
-*.pyc
+*.py[cod]
+__pycache__/
+*$py.class
+
+data/
