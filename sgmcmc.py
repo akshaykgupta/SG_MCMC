@@ -35,7 +35,7 @@ def train(model, data, params):
 
     data: Container
     The data to train on. Should have the following attributes:
-    data.trn_X : np.array ()
+    data.trn_X : np.array
     data.trn_Y : np.array
     data.val_X : np.array
     data.val_Y : np.array
@@ -48,6 +48,7 @@ def train(model, data, params):
     is_sgd_mode = tensor.fscalar('is_sgd_mode')
     lr = tensor.fscalar('lr')
     yy = tensor.vector('yy', dtype='float32')
+    params.train_size = data.trn_X.shape[0]
 
     if params.algo == 'sgld':
         updates, log_likelihood = sgld(model, yy, params)
@@ -85,7 +86,7 @@ def train(model, data, params):
     for i in range(params.n_iter):
 
         #prepare next minibatch
-        mini_idx = np.floor(np.random.rand(params.batch_sz) * data.train_size).astype('int32')
+        mini_idx = np.floor(np.random.rand(params.batch_sz) * params.train_size).astype('int32')
         mini_X = data.trn_X[mini_idx]
         mini_Y = data.trn_Y[mini_idx]
 
@@ -139,6 +140,9 @@ def sgld(model, yy, params):
     Welling, Max, and Yee W. Teh., 2011
     "Bayesian learning via stochastic gradient Langevin dynamics."
     '''
+
+    n = params.batch_sz
+    N = params.train_size
 
     logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2) 
     logprior = log_prior_normal(model.params, op.prec_prior)

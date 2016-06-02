@@ -23,7 +23,7 @@ def get_data(path, op):
     dt.mu  = np.mean(DT_x, axis=0)
     dt.sig = np.std(DT_x, axis=0)
     DT_x = (DT_x - dt.mu) / dt.sig
-    
+
     dt.trn_X = DT_x[:op.train_size]
     dt.trn_Y = DT_y[:op.train_size]
     dt.val_X = DT_x[op.train_size:]
