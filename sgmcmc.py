@@ -150,7 +150,7 @@ def sgld(model, yy, lr, is_sgd_mode, params):
     logpost = N * sumloglik / n + logprior
 
     #compute gradients
-    grads = tensor.grad(cost=logpost,  wrt=params)
+    grads = tensor.grad(cost = logpost,  wrt = model.params)
 
     # gradient clipping 
     if params.gc_norm is not None:
