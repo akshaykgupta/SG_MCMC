@@ -2,6 +2,8 @@ from __future__ import print_function
 
 import theano
 from theano import tensor
+from theano.tensor import slinalg
+from theano.tensor import nlinalg
 from theano.sandbos.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import numpy as np
@@ -53,7 +55,7 @@ def train(model, data, params):
     if params.algo == 'sgld':
         updates, log_likelihood = sgld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sgfs':
-        I_t = tensor.matrix('I_t', dtype='float32')
+        I_t = theano.shared(np.asarray(np.random.randn(*model.params.shape), dtype = theano.config.floatX)
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
         params.is_sgd_mode = True
     elif params.algo == 'sgrld':
@@ -198,11 +200,11 @@ def sgfs(model, yy, lr, I_t, params):
     # update Fisher information
     I_t_next = (1 - lr) * I_t + lr * var_grads_logliks
 
-    B_ch = tensor.slinalg.Cholesky(params.B)
+    B_ch = slinalg.Cholesky(params.B)
     noise = T.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(model.params.shape, avg = 0.0, std = 1.0))
 
     # expensive inversion
-    inv_matrix = tensor.nlinalg.MatrixInverse(gamma * N * I_t_next + (4. / lr) * params.B)
+    inv_matrix = nlinalg.MatrixInverse(gamma * N * I_t_next + (4. / lr) * params.B)
 
     updates = []
     updates.append(I_t, I_t_next)
@@ -212,3 +214,4 @@ def sgfs(model, yy, lr, I_t, params):
     for p, up in zip(model.params, updated_params):
         updates.append(p, up)
     return updates, sumloglik
+
