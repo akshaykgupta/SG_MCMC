@@ -51,7 +51,7 @@ def train(model, data, params):
     params.train_size = data.trn_X.shape[0]
 
     if params.algo == 'sgld':
-        updates, log_likelihood = sgld(model, yy, params)
+        updates, log_likelihood = sgld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sgfs':
         updates, log_likelihood = sgfs(model, yy, params)
     elif params.algo == 'sgrld':
@@ -98,7 +98,7 @@ def train(model, data, params):
             sampling = True
 
         if i % params.lr_halflife == 0:
-            lr = lr / 2
+            params.lr = params.lr / 2
 
         if i % thinning == 0:
             val_pp = fn.forward(data.val_X)
@@ -134,7 +134,7 @@ def grad_clipping(model_params, grads, gc_norm=10.):
                            gc_norm / sqrtnorm, 1.)
     return adj_norm_gs
 
-def sgld(model, yy, params):
+def sgld(model, yy, lr, is_sgd_mode, params):
     '''Stochastic Gradient Langevin Dynamics
     Implemented according to the paper:
     Welling, Max, and Yee W. Teh., 2011
@@ -145,7 +145,7 @@ def sgld(model, yy, params):
     N = params.train_size
 
     logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2) 
-    logprior = log_prior_normal(model.params, op.prec_prior)
+    logprior = log_prior_normal(model.params, params.prec_prior)
     sumloglik = logliks.sum()
     logpost = N * sumloglik / n + logprior
 
@@ -162,8 +162,8 @@ def sgld(model, yy, params):
     for p, g in zip(model.params, grads):
         grad = g * adj_norm_gs 
         # noise is discarded in sgd mode which may be used during burnin
-        noise = ifelse(tensor.eq(sgd_mode, 1.), 
+        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
                        tensor.alloc(0., *p.shape),
-                       tensor.sqrt(params.lr) * trng.normal(p.shape, avg=0.0, std=1.0))
-        updates.append((p, p + 0.5 * params.lr * grad + noise))
-    return updates    
+                       tensor.sqrt(lr) * trng.normal(p.shape, avg=0.0, std=1.0))
+        updates.append((p, p + 0.5 * lr * grad + noise))
+    return updates, sumloglik
