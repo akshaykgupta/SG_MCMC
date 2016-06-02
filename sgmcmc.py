@@ -53,7 +53,9 @@ def train(model, data, params):
     if params.algo == 'sgld':
         updates, log_likelihood = sgld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sgfs':
-        updates, log_likelihood = sgfs(model, yy, params)
+        I_t = tensor.matrix('I_t', dtype='float32')
+        updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
+        params.is_sgd_mode = True
     elif params.algo == 'sgrld':
         updates, log_likelihood = sgrld(model, yy, params)
     elif params.algo == 'sghmc':
@@ -166,4 +168,47 @@ def sgld(model, yy, lr, is_sgd_mode, params):
                        tensor.alloc(0., *p.shape),
                        tensor.sqrt(lr) * trng.normal(p.shape, avg=0.0, std=1.0))
         updates.append((p, p + 0.5 * lr * grad + noise))
+    return updates, sumloglik
+
+def sgfs(model, yy, lr, I_t, params):
+    '''Stochastic Gradient Fisher Scoring
+    Implemented according to the paper:
+    Ahn, Sungjin et. al., 2012
+    "Bayesian posterior sampling via stochastic gradient Fisher scoring."
+    '''
+
+    n = params.batch_sz
+    N = params.train_size
+    gamma = (n + N) / n
+
+    logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2)
+    sumloglik = logliks.sum()
+
+    # compute gradient of likelihood wrt each data point
+    grads_logliks = tensor.jacobian(expression = logliks, wrt = model.params)
+    avg_grads_logliks = grad_logliks.mean(axis = 0)
+    dist_grads_logliks = grad_logliks - avg_grad_logliks
+
+    # compute variance of gradient
+    var_grads_logliks = (1. / (n-1)) * T.dot(dist_grad_logliks.T, dist_grad_logliks)
+
+    logprior = log_prior_normal(model.params, params.prec_prior)
+    grads_prior = tensor.grad(cost = logprior, wrt = model.params)
+
+    # update Fisher information
+    I_t_next = (1 - lr) * I_t + lr * var_grads_logliks
+
+    B_ch = tensor.slinalg.Cholesky(params.B)
+    noise = T.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(model.params.shape, avg = 0.0, std = 1.0))
+
+    # expensive inversion
+    inv_matrix = tensor.nlinalg.MatrixInverse(gamma * N * I_t_next + (4. / lr) * params.B)
+
+    updates = []
+    updates.append(I_t, I_t_next)
+
+    # update the parameters
+    updated_params = 2 * T.dot(inv_matrix, (grads_prior + N * avg_grads_logliks + noise))
+    for p, up in zip(model.params, updated_params):
+        updates.append(p, up)
     return updates, sumloglik
