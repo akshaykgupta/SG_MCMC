@@ -4,7 +4,7 @@ import theano
 from theano import tensor
 from theano.tensor import slinalg
 from theano.tensor import nlinalg
-from theano.sandbos.rng_mrg import MRG_RandomStreams as RandomStreams
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import numpy as np
 
@@ -55,7 +55,11 @@ def train(model, data, params):
     if params.algo == 'sgld':
         updates, log_likelihood = sgld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sgfs':
-        I_t = theano.shared(np.asarray(np.random.randn(*model.params.shape), dtype = theano.config.floatX)
+        n_params = 1
+        for p in model.params:
+            n_params *= tensor.prod(p.shape)
+        I_t = theano.shared(np.asarray(np.random.randn(n_params),
+                                       dtype = theano.config.floatX))
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
         params.is_sgd_mode = True
     elif params.algo == 'sgrld':
@@ -95,7 +99,8 @@ def train(model, data, params):
         mini_Y = data.trn_Y[mini_idx]
 
         #parameter update
-        (train_pp, log_likelihood) = fn.backprop(mini_X, mini_Y, params.lr, params.is_sgd_mode)
+        (train_pp, log_likelihood) = fn.backprop(mini_X, mini_Y, 
+                                                 params.lr, params.is_sgd_mode)
 
         if i == params.burnin and not params.is_sgd_mode:
             #burnin period over, begin sampling
@@ -125,11 +130,11 @@ def train(model, data, params):
             mean_ll = logpdf_normal(ppp, val_yy, 1/var_pp).mean()
             rmse = compute_rmse(ppp, val_yy)
 
-            print '%d/%d, %.2f, %.2f (%.2f)  \r' % \
-                    (i, n_samples, sumloglik, meanlogliks, rmse),
+            print ('%d/%d, %.2f, %.2f (%.2f)  \r' % \
+                    (i, n_samples, sumloglik, meanlogliks, rmse), end = "")
 
-    print '%d/%d, %.2f, %.2f (%.2f)' % \
-            (i, n_samples, sumloglik, meanlogliks, rmse)
+    print ('%d/%d, %.2f, %.2f (%.2f)' % \
+            (i, n_samples, sumloglik, meanlogliks, rmse))
 
 def grad_clipping(model_params, grads, gc_norm=10.):
     norm = ut.norm_gs(model_params, grads)
@@ -187,6 +192,9 @@ def sgfs(model, yy, lr, I_t, params):
     sumloglik = logliks.sum()
 
     # compute gradient of likelihood wrt each data point
+    # grads, log_liks = tensor.jacobian(expression = logliks, wrt = model.params)
+    param_list = []
+
     grads_logliks = tensor.jacobian(expression = logliks, wrt = model.params)
     avg_grads_logliks = grad_logliks.mean(axis = 0)
     dist_grads_logliks = grad_logliks - avg_grad_logliks
@@ -201,17 +209,21 @@ def sgfs(model, yy, lr, I_t, params):
     I_t_next = (1 - lr) * I_t + lr * var_grads_logliks
 
     B_ch = slinalg.Cholesky(params.B)
-    noise = T.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(model.params.shape, avg = 0.0, std = 1.0))
+    noise = T.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(grads_logliks.shape, avg = 0.0, std = 1.0))
 
     # expensive inversion
     inv_matrix = nlinalg.MatrixInverse(gamma * N * I_t_next + (4. / lr) * params.B)
 
     updates = []
-    updates.append(I_t, I_t_next)
+    updates.append((I_t, I_t_next))
 
     # update the parameters
     updated_params = 2 * T.dot(inv_matrix, (grads_prior + N * avg_grads_logliks + noise))
-    for p, up in zip(model.params, updated_params):
-        updates.append(p, up)
+    last_row = 0
+    for p in model.params:
+        sub_index = tensor.prod(p.shape)
+        up = updated_params[last_row:sub_index]
+        up.reshape(p.shape)
+        updates.append((p, up))
+        last_row += sub_index
     return updates, sumloglik
-
