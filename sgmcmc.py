@@ -5,6 +5,7 @@ from theano import tensor
 from theano.tensor import slinalg
 from theano.tensor import nlinalg
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+from theano.ifelse import ifelse
 
 import numpy as np
 
@@ -63,7 +64,8 @@ def train(model, data, params):
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
         params.is_sgd_mode = True
     elif params.algo == 'sgrld':
-        updates, log_likelihood = sgrld(model, yy, params)
+        # initialise G
+        updates, log_likelihood = sgrld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sghmc':
         updates, log_likelihood = sghmc(model, yy, params)
     elif params.algo == 'sgnht':
@@ -141,8 +143,8 @@ def train(model, data, params):
 
 def grad_clipping(model_params, grads, gc_norm=10.):
     norm = ut.norm_gs(model_params, grads)
-    sqrtnorm = T.sqrt(norm)
-    adj_norm_gs = T.switch(T.ge(sqrtnorm, gc_norm), 
+    sqrtnorm = tensor.sqrt(norm)
+    adj_norm_gs = tensor.switch(tensor.ge(sqrtnorm, gc_norm),
                            gc_norm / sqrtnorm, 1.)
     return adj_norm_gs
 
@@ -178,6 +180,7 @@ def sgld(model, yy, lr, is_sgd_mode, params):
                        tensor.alloc(0., *p.shape),
                        tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0))
         updates.append((p, p + 0.5 * lr * grad + noise))
+
     return updates, sumloglik
 
 def sgfs(model, yy, lr, I_t, params):
@@ -229,6 +232,26 @@ def sgfs(model, yy, lr, I_t, params):
         up.reshape(p.shape)
         updates.append((p, up))
         last_row += sub_index
+
+    return updates, sumloglik
+
+def sgrld(model, yy, lr, is_sgd_mode, params):
+    n = params.batch_sz
+    N = params.train_size
+
+    logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2)
+    logprior = log_prior_normal(model.params, params.prec_prior)
+    sumloglik = logliks.sum()
+    logpost = N * sumloglik / n + logprior
+
+    grads = tensor.grad(cost = logpost, wrt = model.params)
+    updates = []
+    for p, g in zip(model.params, grads):
+        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
+                       tensor.alloc(0., *p.shape),
+                       tensor.sqrt(lr * p) * trng.normal(p.shape, avg = 0.0, std = 1.0))
+        updates.append((p, p + 0.5 * lr * p * g + noise))
+
     return updates, sumloglik
 
 def psgld(model, yy, lr, V_t, params):
