@@ -69,7 +69,10 @@ def train(model, data, params):
     elif params.algo == 'sgnht':
         updates, log_likelihood = sgnht(model, yy, params)
     elif params.algo == 'psgld':
-        updates, log_likelihood = psgld(model, yy, params)
+        V_t = [theano.shared(np.asarray(np.zeros(p.shape), 
+                                        dtype = theano.config.floatX))
+               for p in model.params]
+        updates, log_likelihood = psgld(model, yy, lr, V_t, params)
     else:
         raise UnknownArgumentException
 
@@ -173,7 +176,7 @@ def sgld(model, yy, lr, is_sgd_mode, params):
         # noise is discarded in sgd mode which may be used during burnin
         noise = ifelse(tensor.eq(is_sgd_mode, 1.),
                        tensor.alloc(0., *p.shape),
-                       tensor.sqrt(lr) * trng.normal(p.shape, avg=0.0, std=1.0))
+                       tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0))
         updates.append((p, p + 0.5 * lr * grad + noise))
     return updates, sumloglik
 
@@ -226,4 +229,28 @@ def sgfs(model, yy, lr, I_t, params):
         up.reshape(p.shape)
         updates.append((p, up))
         last_row += sub_index
+    return updates, sumloglik
+
+def psgld(model, yy, lr, V_t, params):
+    n = params.batch_sz
+    N = params.train_size
+
+    logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2)
+    sumloglik = logliks.sum()
+    meanloglik = sumloglik / n
+    grads = tensor.grad(cost = meanloglik, wrt = model.params)
+    
+    V_t_next = [params.alpha * v + (1 - params.alpha) * g * g for g, v in zip(grads, V_t)]
+    G_t = [1. / (params.Lambda + tensor.sqrt(v)) for v in V_t_next]
+    
+    logprior = log_prior_normal(model.params, params.prec_prior)
+    grads_prior = tensor.grad(cost = logprior, wrt = model.params)
+
+    updates = []
+    [updates.append(v, v_n) for v, v_n in zip(V_t, V_t_next)]
+
+    for p, g, gp, gt in zip(model.params, grads, grads_prior, G_t):
+        noise = tensor.sqrt(lr * G_t) * trng.normal(p.shape, avg = 0.0, std = 1.0)
+        updates.append((p, p + 0.5 * lr * ((gt * (gp + N * g))) + noise))
+
     return updates, sumloglik
