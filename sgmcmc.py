@@ -287,7 +287,7 @@ def sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params):
         updates.append((v, v - kinetic_energy * lr * v + lr * g + noise))
         updates.append((p, p + lr * v))
 
-    new_kinetic_energy = theano.as_tensor_variable(0.)
+    new_kinetic_energy = tensor.as_tensor_variable(0.)
     for v in velocities:
         new_kinetic_energy += tensor.sum(tensor.sqr(v))
     updates.append(kinetic_energy, kinetic_energy + (new_kinetic_energy / n) * lr)
