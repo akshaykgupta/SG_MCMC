@@ -141,8 +141,10 @@ def train(model, data, params):
     print ('%d/%d, %.2f, %.2f (%.2f)' % \
             (i, n_samples, sumloglik, meanlogliks, rmse))
 
-def grad_clipping(model_params, grads, gc_norm=10.):
-    norm = ut.norm_gs(model_params, grads)
+def grad_clipping(model_params, grads, gc_norm = 10.):
+    norm = tensor.as_tensor_variable(0.)
+    for g in grads:
+        norm = norm + tensor.sum(tensor.sqr(g))
     sqrtnorm = tensor.sqrt(norm)
     adj_norm_gs = tensor.switch(tensor.ge(sqrtnorm, gc_norm),
                            gc_norm / sqrtnorm, 1.)
