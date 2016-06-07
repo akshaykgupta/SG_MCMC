@@ -66,10 +66,15 @@ def train(model, data, params):
     elif params.algo == 'sgrld':
         updates, log_likelihood = sgrld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sghmc':
-        updates, log_likelihood = sghmc(model, yy, params)
+        updates, log_likelihood = sghmc(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sgnht':
-
-        updates, log_likelihood = sgnht(model, yy, params)
+        velocities = []
+        for p in model.params:
+            v = theano.shared(np.asarray(np.random.normal(*p.shape),
+                                         dtype = theanp.config.floatX))
+            velocities.append(v)
+        kinetic_energy = theano.shared(0., dtype = theano.config.floatX)
+        updates, log_likelihood = sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params)
     elif params.algo == 'psgld':
         V_t = [theano.shared(np.asarray(np.zeros(p.shape), 
                                         dtype = theano.config.floatX))
