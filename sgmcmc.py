@@ -76,7 +76,7 @@ def train(model, data, params):
                for p in model.params]
         updates, log_likelihood = psgld(model, yy, lr, V_t, params)
     else:
-        raise UnknownArgumentException
+        raise ValueError
 
     fn = Container()
     fn.backprop = theano.function(inputs = [model.xx, yy, lr, is_sgd_mode],
