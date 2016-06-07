@@ -64,11 +64,11 @@ def train(model, data, params):
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
         params.is_sgd_mode = True
     elif params.algo == 'sgrld':
-        # initialise G
         updates, log_likelihood = sgrld(model, yy, lr, is_sgd_mode, params)
     elif params.algo == 'sghmc':
         updates, log_likelihood = sghmc(model, yy, params)
     elif params.algo == 'sgnht':
+
         updates, log_likelihood = sgnht(model, yy, params)
     elif params.algo == 'psgld':
         V_t = [theano.shared(np.asarray(np.zeros(p.shape), 
@@ -236,6 +236,12 @@ def sgfs(model, yy, lr, I_t, params):
     return updates, sumloglik
 
 def sgrld(model, yy, lr, is_sgd_mode, params):
+    '''Stochastic Gradient Riemannian Langevin Dynamics
+    Implemented according to the paper:
+    Patterson, Sam, and Yee Whye Teh, 2013
+    "Stochastic gradient Riemannian Langevin dynamics on the probability simplex."
+    '''
+
     n = params.batch_sz
     N = params.train_size
 
@@ -245,6 +251,7 @@ def sgrld(model, yy, lr, is_sgd_mode, params):
     logpost = N * sumloglik / n + logprior
 
     grads = tensor.grad(cost = logpost, wrt = model.params)
+
     updates = []
     for p, g in zip(model.params, grads):
         noise = ifelse(tensor.eq(is_sgd_mode, 1.),
@@ -254,7 +261,47 @@ def sgrld(model, yy, lr, is_sgd_mode, params):
 
     return updates, sumloglik
 
+def sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params):
+    '''Stochastic Gradient Nosé-Hoover Thermostat
+    Implemented according to the paper:
+    Ding, Nan, et al., 2014
+    "Bayesian Sampling Using Stochastic Gradient Thermostats."
+    '''
+
+    n = params.batch_sz
+    N = params.train_size
+
+    logliks = - 0.5 * (tensor.log(2 * pi / params.prec_lik) + params.prec_lik * (model.pp - yy)**2)
+    logprior = log_prior_normal(model.params, params.prec_prior)
+    sumloglik = logliks.sum()
+    logpost = N * sumloglik / n + logprior
+
+    grads = tensor.grad(cost = logpost, wrt = model.params)
+
+    updates = []
+
+    for p, g, v in zip(model.params, grads, velocities):
+        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
+                       tensor.alloc(0., *p.shape),
+                       tensor.sqrt(2 * params.A * lr) * trng.normal(p.shape, avg = 0.0, std = 1.0))
+        updates.append((v, v - kinetic_energy * lr * v + lr * g + noise))
+        updates.append((p, p + lr * v))
+
+    new_kinetic_energy = theano.as_tensor_variable(0.)
+    for v in velocities:
+        new_kinetic_energy += tensor.sum(tensor.sqr(v))
+    updates.append(kinetic_energy, kinetic_energy + (new_kinetic_energy / n) * lr)
+
+    return updates, sumloglik
+
+
 def psgld(model, yy, lr, V_t, params):
+    '''Preconditioned Stochastic Gradient Langevin Dynamics
+    Implemented according to the paper:
+    Li, Chunyuan, et al., 2015
+    "Preconditioned stochastic gradient Langevin dynamics for deep neural networks."
+    '''
+
     n = params.batch_sz
     N = params.train_size
 
