@@ -301,7 +301,6 @@ def sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params):
 
     return updates, sumloglik
 
-
 def psgld(model, yy, lr, V_t, params):
     '''Preconditioned Stochastic Gradient Langevin Dynamics
     Implemented according to the paper:
