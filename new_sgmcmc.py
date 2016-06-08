@@ -92,6 +92,7 @@ class SGLD(Trainer):
         prec_prior = self.params['prec_prior']
         gc_norm = self.params['gc_norm']
 
+        # compute log-likelihood
         error = self.model_outputs - self.true_outputs
         logliks = log_normal(error, prec_lik)
         sumloglik = logliks.sum()
@@ -131,7 +132,7 @@ class SGFS(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, B=None, **kwargs):
-        super(SGLD, self).__init__(kwargs)
+        super(SGFS, self).__init__(kwargs)
         self.params['lr'] = initial_lr
         self.lr = tensor.scalar('lr')
         if B:
@@ -146,6 +147,7 @@ class SGFS(Trainer):
         B = self.params['B']
         gamma = (n + N) / n
 
+        # compute log-likelihood
         error = self.model_outputs - self.true_outputs
         logliks = log_normal(error, prec_lik)
         sumloglik = logliks.sum()
@@ -164,6 +166,7 @@ class SGFS(Trainer):
         # update Fisher information
         I_t_next = (1 - self.lr) * self.I_t + self.lr * var_grads
 
+        # compute noise
         B_ch = slinalg.Cholesky(self.params['B'])
         noise = tensor.dot(((2. / tensor.sqrt(lr)) * B_ch), 
                            trng.normal(grads.shape))
@@ -184,5 +187,111 @@ class SGFS(Trainer):
             up.reshape(p.shape)
             updates.append((p, up))
             last_row += sub_index
+
+        return updates, sumloglik
+
+class SGNHT(Trainer):
+    '''Stochastic Gradient Nosé-Hoover Thermostat
+    Implemented according to the paper:
+    Ding, Nan, et al., 2014
+    "Bayesian Sampling Using Stochastic Gradient Thermostats."
+
+    Arguments:
+        initial_lr: float.
+                    The initial learning rate.
+    '''
+
+    def __init__(self, initial_lr=1.0e-5, **kwargs):
+        super(SGNHT, self).__init__(kwargs)
+        self.params['lr'] = initial_lr
+        self.lr = tensor.scalar('lr')
+
+    def _get_updates(self):
+        n = self.params['batch_size']
+        N = self.params['train_size']
+        prec_lik = self.params['prec_lik']
+        prec_prior = self.params['prec_prior']
+        gc_norm = self.params['gc_norm']
+
+        # compute log-likelihood
+        error = self.model_outputs - self.true_outputs
+        logliks = log_normal(error, prec_lik)
+        sumloglik = logliks.sum()
+        logprior = log_prior_normal(self.weights, prec_prior)
+        logpost = N * sumloglik / n + logprior
+
+        # compute gradients
+        grads = tensor.grad(cost = logpost, wrt = self.weights)
+
+        updates = []
+        for p, g, v in zip(self.weights, grads, self.velocities):
+            #inject noise
+            noise = tensor.sqrt(self.lr) * trng.normal(p.shape)
+            updates.append((v, v - self.kinetic_energy * self.lr * v + lr * g + noise))
+            updates.append((p, p + lr * v))
+
+        new_kinetic_energy = 0.
+        for v in velocities:
+            new_kinetic_energy += tensor.sum(tensor.sqr(v))
+        updates.append(self.kinetic_energy,
+                       self.kinetic_energy + (new_kinetic_energy / n) * lr)
+
+        return updates, sumloglik
+
+class pSGLD(Trainer):
+    '''Preconditioned Stochastic Gradient Langevin Dynamics
+    Implemented according to the paper:
+    Li, Chunyuan, et al., 2015
+    "Preconditioned stochastic gradient Langevin dynamics
+    for deep neural networks."
+
+    Arguments:
+        initial_lr: float.
+                    The initial learning rate
+        alpha: float.
+               Balances current vs. historic gradient
+        gamma: float.
+               Controls curvature of preconditioning matrix
+               (Corresponds to lambda in the paper)
+    '''
+
+    def __init__(self, initial_lr=1.0e-5, alpha=0.99, gamma=1.0e-5, **kwargs):
+        super(pSGLD, self).__init__(kwargs)
+        self.params['lr'] = initial_lr
+        self.lr = tensor.scalar('lr')
+        self.params['gamma'] = gamma
+        self.params['alpha'] = alpha
+
+    def _get_updates(self):
+        n = self.params['batch_size']
+        N = self.params['train_size']
+        prec_lik = self.params['prec_lik']
+        prec_prior = self.params['prec_prior']
+        gc_norm = self.params['gc_norm']
+        alpha = self.params['alpha']
+        gamma = self.params['gamma']
+
+        # compute log-likelihood
+        error = self.model_outputs - self.true_outputs
+        logliks = log_normal(error, prec_lik)
+        sumloglik = logliks.sum()
+        meanloglik = sumloglik / n
+
+        # compute gradients
+        grads = tensor.grad(cost = meanloglik, wrt = self.weights)
+
+        # update preconditioning matrix
+        V_t_next = [alpha * v + (1 - alpha) * g * g for g, v in zip(grads, self.V_t)]
+        G_t = [1. / (gamma + tensor.sqrt(v)) for v in V_t_next]
+
+        logprior = log_prior_normal(self.weights, prec_prior)
+        grads_prior = tensor.grad(cost = logprior, wrt = self.weights)
+
+        updates = []
+        [updates.append(v, v_n) for v, v_n in zip(self.V_t, V_t_next)]
+
+        for p, g, gp, gt in zip(self.weights, grads, grads_prior, G_t):
+            noise = tensor.sqrt(self.lr * G_t) * trng.normal(p.shape)
+            updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g))) + noise))
 
         return updates, sumloglik
