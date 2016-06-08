@@ -173,7 +173,7 @@ class SGFS(Trainer):
 
         # expensive inversion
         inv_cond_mat = gamma * N * I_t_next + (4./self.lr) * self.params['B']
-        cond_mat = nlinalg.MatrixInverse(inv_condition_mat)
+        cond_mat = nlinalg.matrix_inverse(inv_condition_mat)
 
         updates = []
         updates.append((self.I_t, I_t_next))
@@ -250,16 +250,16 @@ class pSGLD(Trainer):
                     The initial learning rate
         alpha: float.
                Balances current vs. historic gradient
-        gamma: float.
+        mu: float.
                Controls curvature of preconditioning matrix
                (Corresponds to lambda in the paper)
     '''
 
-    def __init__(self, initial_lr=1.0e-5, alpha=0.99, gamma=1.0e-5, **kwargs):
+    def __init__(self, initial_lr=1.0e-5, alpha=0.99, mu=1.0e-5, **kwargs):
         super(pSGLD, self).__init__(kwargs)
         self.params['lr'] = initial_lr
         self.lr = tensor.scalar('lr')
-        self.params['gamma'] = gamma
+        self.params['mu'] = mu
         self.params['alpha'] = alpha
 
     def _get_updates(self):
@@ -269,7 +269,7 @@ class pSGLD(Trainer):
         prec_prior = self.params['prec_prior']
         gc_norm = self.params['gc_norm']
         alpha = self.params['alpha']
-        gamma = self.params['gamma']
+        mu = self.params['mu']
 
         # compute log-likelihood
         error = self.model_outputs - self.true_outputs
@@ -282,7 +282,7 @@ class pSGLD(Trainer):
 
         # update preconditioning matrix
         V_t_next = [alpha * v + (1 - alpha) * g * g for g, v in zip(grads, self.V_t)]
-        G_t = [1. / (gamma + tensor.sqrt(v)) for v in V_t_next]
+        G_t = [1. / (mu + tensor.sqrt(v)) for v in V_t_next]
 
         logprior = log_prior_normal(self.weights, prec_prior)
         grads_prior = tensor.grad(cost = logprior, wrt = self.weights)
@@ -291,7 +291,10 @@ class pSGLD(Trainer):
         [updates.append(v, v_n) for v, v_n in zip(self.V_t, V_t_next)]
 
         for p, g, gp, gt in zip(self.weights, grads, grads_prior, G_t):
+            # inject noise
             noise = tensor.sqrt(self.lr * G_t) * trng.normal(p.shape)
-            updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g))) + noise))
+            # compute gamma
+            gamma = nlinalg.ExtractDiag()(tensor.jacobian(gt, p))
+            updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g)) + gamma) + noise))
 
         return updates, sumloglik
