@@ -28,6 +28,15 @@ def logpdf_normal(pp, yy, prec_lik):
 def compute_rmse(xx, yy):
     return np.sqrt(((xx - yy)**2).mean())
 
+def grad_clipping(model_params, grads, gc_norm = 10.):
+    norm = 0.
+    for g in grads:
+        norm = norm + tensor.sum(tensor.sqr(g))
+    sqrtnorm = tensor.sqrt(norm)
+    adj_norm_gs = tensor.switch(tensor.ge(sqrtnorm, gc_norm),
+                           gc_norm / sqrtnorm, 1.)
+    return adj_norm_gs
+
 class Trainer(object):
     '''Abstract base class for all SG-MCMC trainers.
     This is NOT a trainer in itself.
@@ -65,6 +74,10 @@ class SGLD(Trainer):
     Implemented according to the paper:
     Welling, Max, and Yee W. Teh., 2011
     "Bayesian learning via stochastic gradient Langevin dynamics."
+
+    Arguments:
+        lr: float.
+            The initial learning rate.
     '''
 
     def __init__(self, initial_lr=1.0e-5, **kwargs):
@@ -81,8 +94,8 @@ class SGLD(Trainer):
 
         error = self.model_outputs - self.true_outputs
         logliks = log_normal(error, prec_lik)
-        logprior = log_prior_normal(self.weights, prec_prior)
         sumloglik = logliks.sum()
+        logprior = log_prior_normal(self.weights, prec_prior)
         logpost = N * sumloglik / n + logprior
 
         #compute gradients
@@ -98,7 +111,78 @@ class SGLD(Trainer):
         for p, g in zip(self.weights, grads):
             grad = g * adj_norm_gs
             #inject noise
-            noise = tensor.sqrt(self.lr) * trng.normal(p.shape, avg = 0.0, std = 1.0)
+            noise = tensor.sqrt(self.lr) * trng.normal(p.shape)
             updates.append((p, p + 0.5 * self.lr * grad + noise))
+
+        return updates, sumloglik
+
+class SGFS(Trainer):
+    '''Stochastic Gradient Fisher Scoring
+    Implemented according to the paper:
+    Ahn, Sungjin et. al., 2012
+    "Bayesian posterior sampling via stochastic gradient Fisher scoring."
+
+    Arguments:
+        initial_lr: float.
+                    The initial learning rate.
+        B: numpy.array of size(n_weights, n_weights).
+           Symmetric positive-definite matrix. Here n_weights is the total
+           number of parameters in the model
+    '''
+
+    def __init__(self, initial_lr=1.0e-5, B=None, **kwargs):
+        super(SGLD, self).__init__(kwargs)
+        self.params['lr'] = initial_lr
+        self.lr = tensor.scalar('lr')
+        if B:
+            self.params['B'] = B
+
+    def _get_updates(self):
+        n = self.params['batch_size']
+        N = self.params['train_size']
+        prec_lik = self.params['prec_lik']
+        prec_prior = self.params['prec_prior']
+        gc_norm = self.params['gc_norm']
+        B = self.params['B']
+        gamma = (n + N) / n
+
+        error = self.model_outputs - self.true_outputs
+        logliks = log_normal(error, prec_lik)
+        sumloglik = logliks.sum()
+
+        # compute gradient of likelihood wrt each data point
+        grads = tensor.jacobian(expression = logliks, wrt = self.weights)
+        avg_grads = grads.mean(axis = 0)
+        dist_grads = grads - avg_grads
+
+        # compute variance of gradient
+        var_grads = (1. / (n-1)) * tensor.dot(dist_grads.T, dist_grads)
+
+        logprior = log_prior_normal(self.weights, prec_prior)
+        grads_prior = tensor.grad(cost = logprior, wrt = self.weights)
+
+        # update Fisher information
+        I_t_next = (1 - self.lr) * self.I_t + self.lr * var_grads
+
+        B_ch = slinalg.Cholesky(self.params['B'])
+        noise = tensor.dot(((2. / tensor.sqrt(lr)) * B_ch), 
+                           trng.normal(grads.shape))
+
+        # expensive inversion
+        inv_cond_mat = gamma * N * I_t_next + (4./self.lr) * self.params['B']
+        cond_mat = nlinalg.MatrixInverse(inv_condition_mat)
+
+        updates = []
+        updates.append((self.I_t, I_t_next))
+
+        # update the parameters
+        updated_params = 2 * tensor.dot(cond_mat, (grads_prior + N * avg_grads + noise))
+        last_row = 0
+        for p in self.weights:
+            sub_index = tensor.prod(p.shape)
+            up = updated_params[last_row:sub_index]
+            up.reshape(p.shape)
+            updates.append((p, up))
+            last_row += sub_index
 
         return updates, sumloglik
