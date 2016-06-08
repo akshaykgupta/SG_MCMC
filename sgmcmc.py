@@ -48,13 +48,12 @@ def train(model, data, params):
 
     '''
 
-    is_sgd_mode = tensor.fscalar('is_sgd_mode')
     lr = tensor.fscalar('lr')
     yy = tensor.vector('yy', dtype='float32')
     params.train_size = data.trn_X.shape[0]
 
     if params.algo == 'sgld':
-        updates, log_likelihood = sgld(model, yy, lr, is_sgd_mode, params)
+        updates, log_likelihood = sgld(model, yy, lr, params)
     elif params.algo == 'sgfs':
         n_params = 1
         for p in model.params:
@@ -62,11 +61,10 @@ def train(model, data, params):
         I_t = theano.shared(np.asarray(np.random.randn(n_params),
                                        dtype = theano.config.floatX))
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
-        params.is_sgd_mode = True
     elif params.algo == 'sgrld':
-        updates, log_likelihood = sgrld(model, yy, lr, is_sgd_mode, params)
+        updates, log_likelihood = sgrld(model, yy, lr, params)
     elif params.algo == 'sghmc':
-        updates, log_likelihood = sghmc(model, yy, lr, is_sgd_mode, params)
+        updates, log_likelihood = sghmc(model, yy, lr, params)
     elif params.algo == 'sgnht':
         velocities = []
         for p in model.params:
@@ -74,7 +72,7 @@ def train(model, data, params):
                                          dtype = theanp.config.floatX))
             velocities.append(v)
         kinetic_energy = theano.shared(0., dtype = theano.config.floatX)
-        updates, log_likelihood = sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params)
+        updates, log_likelihood = sgnht(model, yy, lr, velocities, kinetic_energy, params)
     elif params.algo == 'psgld':
         V_t = [theano.shared(np.asarray(np.zeros(p.shape), 
                                         dtype = theano.config.floatX))
@@ -84,7 +82,7 @@ def train(model, data, params):
         raise ValueError
 
     fn = Container()
-    fn.backprop = theano.function(inputs = [model.xx, yy, lr, is_sgd_mode],
+    fn.backprop = theano.function(inputs = [model.xx, yy, lr],
                                   outputs = [model.pp, log_likelihood],
                                   updates = updates,
                                   on_unused_input = 'warn')
@@ -98,9 +96,6 @@ def train(model, data, params):
     val_avg_log_likelihood = 0.0
     n_samples = 0
 
-    if not params.is_sgd_mode:
-        sampling = False
-
     for i in range(params.n_iter):
 
         #prepare next minibatch
@@ -109,10 +104,9 @@ def train(model, data, params):
         mini_Y = data.trn_Y[mini_idx]
 
         #parameter update
-        (train_pp, log_likelihood) = fn.backprop(mini_X, mini_Y, 
-                                                 params.lr, params.is_sgd_mode)
+        (train_pp, log_likelihood) = fn.backprop(mini_X, mini_Y, params.lr)
 
-        if i == params.burnin and not params.is_sgd_mode:
+        if i == params.burnin:
             #burnin period over, begin sampling
             sampling = True
 
@@ -155,7 +149,7 @@ def grad_clipping(model_params, grads, gc_norm = 10.):
                            gc_norm / sqrtnorm, 1.)
     return adj_norm_gs
 
-def sgld(model, yy, lr, is_sgd_mode, params):
+def sgld(model, yy, lr, params):
     '''Stochastic Gradient Langevin Dynamics
     Implemented according to the paper:
     Welling, Max, and Yee W. Teh., 2011
@@ -182,10 +176,8 @@ def sgld(model, yy, lr, is_sgd_mode, params):
     updates = []
     for p, g in zip(model.params, grads):
         grad = g * adj_norm_gs 
-        # noise is discarded in sgd mode which may be used during burnin
-        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
-                       tensor.alloc(0., *p.shape),
-                       tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0))
+        #inject noise
+        noise = tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0)
         updates.append((p, p + 0.5 * lr * grad + noise))
 
     return updates, sumloglik
@@ -242,7 +234,7 @@ def sgfs(model, yy, lr, I_t, params):
 
     return updates, sumloglik
 
-def sgrld(model, yy, lr, is_sgd_mode, params):
+def sgrld(model, yy, lr, params):
     '''Stochastic Gradient Riemannian Langevin Dynamics
     Implemented according to the paper:
     Patterson, Sam, and Yee Whye Teh, 2013
@@ -261,14 +253,13 @@ def sgrld(model, yy, lr, is_sgd_mode, params):
 
     updates = []
     for p, g in zip(model.params, grads):
-        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
-                       tensor.alloc(0., *p.shape),
-                       tensor.sqrt(lr * p) * trng.normal(p.shape, avg = 0.0, std = 1.0))
+        #inject noise
+        noise = tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0)
         updates.append((p, p + 0.5 * lr * p * g + noise))
 
     return updates, sumloglik
 
-def sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params):
+def sgnht(model, yy, lr, velocities, kinetic_energy, params):
     '''Stochastic Gradient Nosé-Hoover Thermostat
     Implemented according to the paper:
     Ding, Nan, et al., 2014
@@ -288,9 +279,8 @@ def sgnht(model, yy, lr, is_sgd_mode, velocities, kinetic_energy, params):
     updates = []
 
     for p, g, v in zip(model.params, grads, velocities):
-        noise = ifelse(tensor.eq(is_sgd_mode, 1.),
-                       tensor.alloc(0., *p.shape),
-                       tensor.sqrt(2 * params.A * lr) * trng.normal(p.shape, avg = 0.0, std = 1.0))
+        #inject noise
+        noise = tensor.sqrt(lr) * trng.normal(p.shape, avg = 0.0, std = 1.0)
         updates.append((v, v - kinetic_energy * lr * v + lr * g + noise))
         updates.append((p, p + lr * v))
 
