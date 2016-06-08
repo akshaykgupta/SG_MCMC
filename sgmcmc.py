@@ -58,7 +58,7 @@ def train(model, data, params):
         n_params = 1
         for p in model.params:
             n_params *= tensor.prod(p.shape)
-        I_t = theano.shared(np.asarray(np.random.randn(n_params),
+        I_t = theano.shared(np.asarray(np.random.randn(n_params, n_params),
                                        dtype = theano.config.floatX))
         updates, log_likelihood = sgfs(model, yy, lr, I_t, params)
     elif params.algo == 'sgrld':
@@ -197,15 +197,12 @@ def sgfs(model, yy, lr, I_t, params):
     sumloglik = logliks.sum()
 
     # compute gradient of likelihood wrt each data point
-    # grads, log_liks = tensor.jacobian(expression = logliks, wrt = model.params)
-    param_list = []
-
     grads_logliks = tensor.jacobian(expression = logliks, wrt = model.params)
     avg_grads_logliks = grad_logliks.mean(axis = 0)
     dist_grads_logliks = grad_logliks - avg_grad_logliks
 
     # compute variance of gradient
-    var_grads_logliks = (1. / (n-1)) * T.dot(dist_grad_logliks.T, dist_grad_logliks)
+    var_grads_logliks = (1. / (n-1)) * tensor.dot(dist_grad_logliks.T, dist_grad_logliks)
 
     logprior = log_prior_normal(model.params, params.prec_prior)
     grads_prior = tensor.grad(cost = logprior, wrt = model.params)
@@ -214,7 +211,7 @@ def sgfs(model, yy, lr, I_t, params):
     I_t_next = (1 - lr) * I_t + lr * var_grads_logliks
 
     B_ch = slinalg.Cholesky(params.B)
-    noise = T.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(grads_logliks.shape, avg = 0.0, std = 1.0))
+    noise = tensor.dot(((2. / tensor.sqrt(lr)) * B_ch), trng.normal(grads_logliks.shape, avg = 0.0, std = 1.0))
 
     # expensive inversion
     inv_matrix = nlinalg.MatrixInverse(gamma * N * I_t_next + (4. / lr) * params.B)
@@ -223,7 +220,7 @@ def sgfs(model, yy, lr, I_t, params):
     updates.append((I_t, I_t_next))
 
     # update the parameters
-    updated_params = 2 * T.dot(inv_matrix, (grads_prior + N * avg_grads_logliks + noise))
+    updated_params = 2 * tensor.dot(inv_matrix, (grads_prior + N * avg_grads_logliks + noise))
     last_row = 0
     for p in model.params:
         sub_index = tensor.prod(p.shape)
