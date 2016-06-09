@@ -46,9 +46,15 @@ class Trainer(object):
         self.__dict__.update(kwargs)
         self.updates = []
         self.params = {}
-        self.inputs = tensor.matrix('inputs')
-        self.model_outputs = tensor.matrix('model_outputs')
+        self.inputs = None
+        self.model_outputs = None
         self.true_outputs = tensor.row('true_outputs')
+
+    def initialize_params(self, params, data):
+        raise NotImplementedError
+
+    def _create_auxiliary_variables(self):
+        self.lr = tensor.scalar('lr')
 
     def _get_updates(self):
         raise NotImplementedError
@@ -63,11 +69,99 @@ class Trainer(object):
         return theano.function(inputs  = [self.model_inputs],
                                outputs = [self.model_outputs])
 
-    def initialize_params(self, params):
-        raise NotImplementedError
+    def train(self, model, data, params):
+        '''Main training loop.
 
-    def train(model, data, params):
-        raise NotImplementedError
+        Arguments:
+            model: object / Container (see utils.py)
+                   The model. It should have at least the following attributes:
+                   model.inputs: theano.tensor.matrix
+                                 Representing input minibatch.
+                   model.outputs: theano.tensor.row
+                                  Representing model outputs.
+                   model.weights: list of theano.shared variables
+                                  List of model parameters.
+
+            data: object / Container
+                  The data. It should have at least the following attributes:
+                  data.x_train: np.array
+                  data.y_train: np.array
+                  data.x_val: np.array
+                  data.y_val: np.array
+
+            params: dict
+                    Additional parameters for training.
+        '''
+
+        self.inputs = model.inputs
+        self.model_outputs = model.outputs
+        self.weights = model.weights
+        self.initialize_params(params, data)
+        self.create_auxiliary_variables(params, data)
+
+        # get update equations
+        self.updates, sumloglik = self._get_updates()
+
+        n = self.params['batch_size']
+        N = self.params['train_size']
+        lr = self.params['lr']
+
+        # create training and prediction functions
+        fn = Container()
+        fn.train = self._get_training_function()
+        fn.predict = self._get_prediction_function()
+
+        avg_pp = np.zeros(data.val_Y.shape)
+        sum_pp = np.zeros(data.val_Y.shape)
+        sumsq_pp = np.zeros(data.val_Y.shape)
+        n_samples = 0
+
+        do_sampling = self.params['sampling']
+
+        for i in range(self.params['n_iter']):
+
+            # prepare next minibatch
+            mini_idx = np.floor(np.random.rand(n) * N).astype('int32')
+            mini_X = data.x_train[mini_idx]
+            mini_Y = data.y_train[mini_idx]
+
+            # parameter update
+            train_pp, sumloglik = fn.train(mini_X, mini_Y, lr)
+
+            if i % self.params['half_life'] == 0:
+                lr /= 2
+
+            if i == self.params['burn_in']:
+                # burnin period over, begin sampling
+                do_sampling = True
+
+            if i % self.params['thinning'] == 0:
+                val_pp = fn.predict(data.x_val)
+
+                if do_sampling:
+                    n_samples += 1
+                    # prediction based on current parameter (sample)
+                    avg_pp = ((1 - (1./n_samples)) * avg_pp) + ((1./n_samples) * val_pp)
+                    ppp = avg_pp
+                    # online sample variance
+                    sum_pp += val_pp
+                    sumsqr_pp += val_pp * val_pp
+                    var_pp = (sumsqr_pp - (sum_pp * sum_pp)/n_samples) / (n_samples - 1)
+                else:
+                    ppp = val_pp
+
+                    trn_pp = fn.forward(dt.x_train) # train predictions
+                    var_pp = np.var(trn_pp - data.y_train)
+
+                meanloglik = logpdf_normal(ppp, y_val, 1/var_pp).mean()
+                rmse = compute_rmse(ppp, y_val)
+
+                print ('%d/%d, %.2f, %.2f (%.2f)  \r' % \
+                        (i, n_samples, sumloglik, meanloglik, rmse), end = "")
+
+        print ('%d/%d, %.2f, %.2f (%.2f)' % \
+              (i, n_samples, sumloglik, meanloglik, rmse))
+
 
 class SGLD(Trainer):
     '''Stochastic Gradient Langevin Dynamics
@@ -83,7 +177,6 @@ class SGLD(Trainer):
     def __init__(self, initial_lr=1.0e-5, **kwargs):
         super(SGLD, self).__init__(kwargs)
         self.params['lr'] = initial_lr
-        self.lr = tensor.scalar('lr')
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -134,9 +227,16 @@ class SGFS(Trainer):
     def __init__(self, initial_lr=1.0e-5, B=None, **kwargs):
         super(SGFS, self).__init__(kwargs)
         self.params['lr'] = initial_lr
-        self.lr = tensor.scalar('lr')
         if B:
             self.params['B'] = B
+
+    def _create_auxiliary_variables(self):
+        self.lr = tensor.scalar('lr')
+        n_params = 0
+        for p in self.weights:
+            n_params += tensor.prod(p.shape)
+        self.I_t = theano.shared(np.asarray(np.random.randn(n_params, n_params),
+                                            dtype = theano.config.floatX))
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -199,12 +299,22 @@ class SGNHT(Trainer):
     Arguments:
         initial_lr: float.
                     The initial learning rate.
+        A: float.
+           Diffusion parameter.
     '''
 
-    def __init__(self, initial_lr=1.0e-5, **kwargs):
+    def __init__(self, initial_lr=1.0e-5, A = 1., **kwargs):
         super(SGNHT, self).__init__(kwargs)
         self.params['lr'] = initial_lr
+        self.params['A'] = A
+
+    def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
+        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.shape),
+                                                    dtype = theano.config.floatX))
+                           for p in self.weights]
+        self.kinetic_energy = theano.shared(self.params['A'],
+                                            dtype = theano.config.floatX)
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -224,17 +334,73 @@ class SGNHT(Trainer):
         grads = tensor.grad(cost = logpost, wrt = self.weights)
 
         updates = []
+        new_kinetic_energy = 0.
         for p, g, v in zip(self.weights, grads, self.velocities):
             #inject noise
-            noise = tensor.sqrt(self.lr) * trng.normal(p.shape)
-            updates.append((v, v - self.kinetic_energy * self.lr * v + lr * g + noise))
-            updates.append((p, p + lr * v))
+            noise = tensor.sqrt(self.lr * self.params['A']) * trng.normal(p.shape)
+            new_v = v - self.kinetic_energy * self.lr * v + self.lr * g + noise
+            updates.append((v, new_v))
+            updates.append((p, p + self.lr * new_v))
+            new_kinetic_energy += tensor.sum(tensor.sqr(new_v))
 
-        new_kinetic_energy = 0.
-        for v in velocities:
-            new_kinetic_energy += tensor.sum(tensor.sqr(v))
         updates.append(self.kinetic_energy,
-                       self.kinetic_energy + (new_kinetic_energy / n) * lr)
+                       self.kinetic_energy + ((new_kinetic_energy/n) - 1) * self.lr)
+
+        return updates, sumloglik
+
+class mSGNHT(Trainer):
+    '''Multivariable Stochastic Gradient Nosé-Hoover Thermostat
+    Implemented according to the paper:
+    Gan et al., 2015
+    "Scalable Deep Poisson Factor Analysis for Topic Modeling"
+
+    Arguments:
+        initial_lr: float.
+                    The initial learning rate.
+        A: np.array.
+           Diffusion matrix
+    '''
+
+    def __init__(self, initial_lr=1.0e-5, A=None, **kwargs):
+        super(SGNHT, self).__init__(kwargs)
+        self.params['lr'] = initial_lr
+        if A:
+            self.params['A'] = A
+
+    def _create_auxiliary_variables(self):
+        self.lr = tensor.scalar('lr')
+        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.shape),
+                                                    dtype = theano.config.floatX))
+                           for p in self.weights]
+        self.kinetic_energies = [theano.shared(self.params['A'],
+                                               dtype = theano.config.floatX)
+                                 for p in self.weights]
+
+    def _get_updates(self):
+        n = self.params['batch_size']
+        N = self.params['train_size']
+        prec_lik = self.params['prec_lik']
+        prec_prior = self.params['prec_prior']
+        gc_norm = self.params['gc_norm']
+
+        # compute log-likelihood
+        error = self.model_outputs - self.true_outputs
+        logliks = log_normal(error, prec_lik)
+        sumloglik = logliks.sum()
+        logprior = log_prior_normal(self.weights, prec_prior)
+        logpost = N * sumloglik / n + logprior
+
+        # compute gradients
+        grads = tensor.grad(cost = logpost, wrt = self.weights)
+
+        updates = []
+        for p, g, v, k in zip(self.weights, grads, self.velocities, self.kinetic_energies):
+            #inject noise
+            noise = tensor.sqrt(self.lr * self.params['A']) * trng.normal(p.shape)
+            new_v = v - k * self.lr * v + self.lr * g + noise
+            updates.append((v, new_v))
+            updates.append((p, p + self.lr * new_v))
+            updates.append((k, k + self.lr * (tensor.sqr(new_v) - 1.)))
 
         return updates, sumloglik
 
@@ -253,14 +419,22 @@ class pSGLD(Trainer):
         mu: float.
                Controls curvature of preconditioning matrix
                (Corresponds to lambda in the paper)
+        use_gamma: whether to use the Gamma(theta) term which is expensive to compute
     '''
 
-    def __init__(self, initial_lr=1.0e-5, alpha=0.99, mu=1.0e-5, **kwargs):
+    def __init__(self, initial_lr=1.0e-5, alpha=0.99, mu=1.0e-5, use_gamma = False, **kwargs):
         super(pSGLD, self).__init__(kwargs)
         self.params['lr'] = initial_lr
-        self.lr = tensor.scalar('lr')
         self.params['mu'] = mu
         self.params['alpha'] = alpha
+        self.params['use_gamma'] = use_gamma
+
+    def _create_auxiliary_variables(self):
+        self.lr = tensor.scalar['lr']
+        self.V_t = [theano.shared(np.asarray(np.zeros(p.shape),
+                                             dtype = theano.config.floatX))
+                    for p in self.weights]
+
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -270,6 +444,7 @@ class pSGLD(Trainer):
         gc_norm = self.params['gc_norm']
         alpha = self.params['alpha']
         mu = self.params['mu']
+        use_gamma = self.params['use_gamma']
 
         # compute log-likelihood
         error = self.model_outputs - self.true_outputs
@@ -293,8 +468,11 @@ class pSGLD(Trainer):
         for p, g, gp, gt in zip(self.weights, grads, grads_prior, G_t):
             # inject noise
             noise = tensor.sqrt(self.lr * G_t) * trng.normal(p.shape)
-            # compute gamma
-            gamma = nlinalg.ExtractDiag()(tensor.jacobian(gt, p))
-            updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g)) + gamma) + noise))
+            if use_gamma:
+                # compute gamma
+                gamma = nlinalg.ExtractDiag()(tensor.jacobian(gt, p))
+                updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g)) + gamma) + noise))
+            else:
+                updates.append((p, p + 0.5 * self.lr * (gt * (gp + N * g)) + noise))
 
         return updates, sumloglik
