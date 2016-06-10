@@ -51,7 +51,16 @@ class Trainer(object):
         self.true_outputs = tensor.row('true_outputs')
 
     def initialize_params(self, params, data):
-        raise NotImplementedError
+        self.params['batch_size'] = params['batch_size'] if 'batch_size' in params else 32
+        self.params['burn_in'] = params['burn_in'] if 'burn_in' in params else 10000
+        self.params['n_iter'] = params['n_iter'] if 'n_iter' in params else 500000
+        self.params['print_iter'] = params['print_iter'] if 'print_iter' in params else 100
+        self.params['prec_like'] = params['prec_like'] if 'prec_like' in params else 1.25
+        self.params['prec_prior'] = params['prec_prior'] if 'prec_prior' in params else 1.
+        self.params['lr_decay'] = params['lr_decay'] if 'lr_decay' in params else 80000
+        self.params['thinning'] = params['thinning'] if 'thinning' in params else 10
+        self.params['train_size'] = data.x_train.shape[0]
+        self.params['val_size'] = data.x_val.shape[0]
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
@@ -111,12 +120,10 @@ class Trainer(object):
         fn.train = self._get_training_function()
         fn.predict = self._get_prediction_function()
 
-        avg_pp = np.zeros(data.val_Y.shape)
-        sum_pp = np.zeros(data.val_Y.shape)
-        sumsq_pp = np.zeros(data.val_Y.shape)
+        avg_pp = np.zeros(data.y_val.shape)
+        sum_pp = np.zeros(data.y_val.shape)
+        sumsq_pp = np.zeros(data.y_val.shape)
         n_samples = 0
-
-        do_sampling = self.params['sampling']
 
         for i in range(self.params['n_iter']):
 
@@ -177,6 +184,18 @@ class SGLD(Trainer):
     def __init__(self, initial_lr=1.0e-5, **kwargs):
         super(SGLD, self).__init__(kwargs)
         self.params['lr'] = initial_lr
+
+    def initialize_params(self, params, data):
+        self.params['batch_size'] = params['batch_size'] if 'batch_size' in params else 32
+        self.params['burn_in'] = params['burn_in'] if 'burn_in' in params else 10000
+        self.params['n_iter'] = params['n_iter'] if 'n_iter' in params else 500000
+        self.params['print_iter'] = params['print_iter'] if 'print_iter' in params else 100
+        self.params['prec_like'] = params['prec_like'] if 'prec_like' in params else 1.25
+        self.params['prec_prior'] = params['prec_prior'] if 'prec_prior' in params else 1.
+        self.params['lr_decay'] = params['lr_decay'] if 'lr_decay' in params else 80000
+        self.params['thinning'] = params['thinning'] if 'thinning' in params else 10
+        self.params['train_size'] = data.x_train.shape[0]
+        self.params['val_size'] = data.x_val.shape[0]
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -417,9 +436,10 @@ class pSGLD(Trainer):
         alpha: float.
                Balances current vs. historic gradient
         mu: float.
-               Controls curvature of preconditioning matrix
-               (Corresponds to lambda in the paper)
-        use_gamma: whether to use the Gamma(theta) term which is expensive to compute
+            Controls curvature of preconditioning matrix
+            (Corresponds to lambda in the paper)
+        use_gamma: boolean.
+                   Whether to use the Gamma term which is expensive to compute
     '''
 
     def __init__(self, initial_lr=1.0e-5, alpha=0.99, mu=1.0e-5, use_gamma = False, **kwargs):
