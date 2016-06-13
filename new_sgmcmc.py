@@ -1,3 +1,4 @@
+# coding=utf-8
 from __future__ import print_function
 
 import theano
@@ -154,6 +155,7 @@ class Trainer(object):
                     n_samples += 1
                     # prediction based on current parameter (sample)
                     avg_pp = ((1 - (1./n_samples)) * avg_pp) + ((1./n_samples) * val_pp)
+                    # trn_pp = fn.predict(data.x_train) # train predictions
                     ppp = avg_pp
                     # online sample variance
                     sum_pp += val_pp
@@ -167,8 +169,9 @@ class Trainer(object):
 
                 meanloglik = logpdf_normal(ppp, data.y_val, 1/var_pp).mean()
                 rmse = compute_rmse(ppp, data.y_val)
+                # trmse = compute_rmse(trn_pp, data.y_train)
 
-                print ('%d/%d, %.2f, %.2f (%.2f)  \r' % \
+                print ('%d/%d, %.2f, %.2f (%.2f)  \n' % \
                         (i, n_samples, sumloglik, meanloglik, rmse), end = "")
 
         print ('%d/%d, %.2f, %.2f (%.2f)' % \
