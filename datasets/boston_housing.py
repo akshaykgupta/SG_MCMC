@@ -3,7 +3,7 @@ import numpy as np
 
 from utils import Container
 
-def get_data(path, op):
+def get_data(path, train_size = 456):
 
     dt = Container()
     DT = []
@@ -24,10 +24,10 @@ def get_data(path, op):
     dt.sig = np.std(DT_x, axis=0)
     DT_x = (DT_x - dt.mu) / dt.sig
 
-    dt.trn_X = DT_x[:op.train_size]
-    dt.trn_Y = DT_y[:op.train_size]
-    dt.val_X = DT_x[op.train_size:]
-    dt.val_Y = DT_y[op.train_size:]
+    dt.x_train = DT_x[:train_size]
+    dt.y_train = DT_y[:train_size]
+    dt.x_val = DT_x[train_size:]
+    dt.y_val = DT_y[train_size:]
 
     return dt
 

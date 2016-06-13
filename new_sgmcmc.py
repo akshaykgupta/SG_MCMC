@@ -8,17 +8,18 @@ from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano.ifelse import ifelse
 
 import numpy as np
+from utils import Container, tt
 
 pi = 3.141592653
 trng = RandomStreams(1234)
 
 def log_normal(x, prec):
-    return tensor.sum(-0.5 * (tensor.log(2*pi / prec) + prec * tensor.sqr(x)))
+    return -0.5 * (tensor.log(2*pi / prec) + prec * tensor.sqr(x))
 
 def log_prior_normal(model_params, prec):
     res = 0.
     for p in model_params:
-        res += log_normal(p, prec)
+        res += tensor.sum(log_normal(p, prec))
     return res
 
 def logpdf_normal(pp, yy, prec_lik):
@@ -48,17 +49,18 @@ class Trainer(object):
         self.params = {}
         self.inputs = None
         self.model_outputs = None
-        self.true_outputs = tensor.row('true_outputs')
+        self.true_outputs = tensor.vector('true_outputs')
 
     def initialize_params(self, params, data):
         self.params['batch_size'] = params['batch_size'] if 'batch_size' in params else 32
         self.params['burn_in'] = params['burn_in'] if 'burn_in' in params else 10000
         self.params['n_iter'] = params['n_iter'] if 'n_iter' in params else 500000
         self.params['print_iter'] = params['print_iter'] if 'print_iter' in params else 100
-        self.params['prec_like'] = params['prec_like'] if 'prec_like' in params else 1.25
+        self.params['prec_lik'] = params['prec_lik'] if 'prec_lik' in params else 1.25
         self.params['prec_prior'] = params['prec_prior'] if 'prec_prior' in params else 1.
         self.params['lr_decay'] = params['lr_decay'] if 'lr_decay' in params else 80000
         self.params['thinning'] = params['thinning'] if 'thinning' in params else 10
+        self.params['gc_norm'] = params['gc_norm'] if 'gc_norm' in params else 1.0
         self.params['train_size'] = data.x_train.shape[0]
         self.params['val_size'] = data.x_val.shape[0]
 
@@ -69,16 +71,18 @@ class Trainer(object):
         raise NotImplementedError
 
     def _get_training_function(self):
-        return theano.function(inputs  = [self.model_inputs, self.true_outputs,
+        return theano.function(inputs  = [self.inputs, self.true_outputs,
                                           self.lr],
                                outputs = [self.model_outputs, self.sumloglik],
-                               updates = self.updates)
+                               updates = self.updates,
+                               allow_input_downcast = True)
 
     def _get_prediction_function(self):
-        return theano.function(inputs  = [self.model_inputs],
-                               outputs = [self.model_outputs])
+        return theano.function(inputs  = [self.inputs],
+                               outputs = self.model_outputs,
+                               allow_input_downcast = True)
 
-    def train(self, model, data, params):
+    def train(self, model, data, params = {}):
         '''Main training loop.
 
         Arguments:
@@ -106,10 +110,10 @@ class Trainer(object):
         self.model_outputs = model.outputs
         self.weights = model.weights
         self.initialize_params(params, data)
-        self.create_auxiliary_variables(params, data)
+        self._create_auxiliary_variables()
 
         # get update equations
-        self.updates, sumloglik = self._get_updates()
+        self.updates, self.sumloglik = self._get_updates()
 
         n = self.params['batch_size']
         N = self.params['train_size']
@@ -122,8 +126,9 @@ class Trainer(object):
 
         avg_pp = np.zeros(data.y_val.shape)
         sum_pp = np.zeros(data.y_val.shape)
-        sumsq_pp = np.zeros(data.y_val.shape)
+        sumsqr_pp = np.zeros(data.y_val.shape)
         n_samples = 0
+        do_sampling = False
 
         for i in range(self.params['n_iter']):
 
@@ -135,7 +140,7 @@ class Trainer(object):
             # parameter update
             train_pp, sumloglik = fn.train(mini_X, mini_Y, lr)
 
-            if i % self.params['half_life'] == 0:
+            if i % self.params['lr_decay'] == 0:
                 lr /= 2
 
             if i == self.params['burn_in']:
@@ -157,11 +162,11 @@ class Trainer(object):
                 else:
                     ppp = val_pp
 
-                    trn_pp = fn.forward(dt.x_train) # train predictions
+                    trn_pp = fn.predict(data.x_train) # train predictions
                     var_pp = np.var(trn_pp - data.y_train)
 
-                meanloglik = logpdf_normal(ppp, y_val, 1/var_pp).mean()
-                rmse = compute_rmse(ppp, y_val)
+                meanloglik = logpdf_normal(ppp, data.y_val, 1/var_pp).mean()
+                rmse = compute_rmse(ppp, data.y_val)
 
                 print ('%d/%d, %.2f, %.2f (%.2f)  \r' % \
                         (i, n_samples, sumloglik, meanloglik, rmse), end = "")
@@ -182,7 +187,7 @@ class SGLD(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, **kwargs):
-        super(SGLD, self).__init__(kwargs)
+        super(SGLD, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
 
     def initialize_params(self, params, data):
@@ -190,10 +195,11 @@ class SGLD(Trainer):
         self.params['burn_in'] = params['burn_in'] if 'burn_in' in params else 10000
         self.params['n_iter'] = params['n_iter'] if 'n_iter' in params else 500000
         self.params['print_iter'] = params['print_iter'] if 'print_iter' in params else 100
-        self.params['prec_like'] = params['prec_like'] if 'prec_like' in params else 1.25
+        self.params['prec_lik'] = params['prec_lik'] if 'prec_lik' in params else 1.25
         self.params['prec_prior'] = params['prec_prior'] if 'prec_prior' in params else 1.
         self.params['lr_decay'] = params['lr_decay'] if 'lr_decay' in params else 80000
         self.params['thinning'] = params['thinning'] if 'thinning' in params else 10
+        self.params['gc_norm'] = params['gc_norm'] if 'gc_norm' in params else None
         self.params['train_size'] = data.x_train.shape[0]
         self.params['val_size'] = data.x_val.shape[0]
 
@@ -244,7 +250,7 @@ class SGFS(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, B=None, **kwargs):
-        super(SGFS, self).__init__(kwargs)
+        super(SGFS, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
         if B:
             self.params['B'] = B
@@ -323,7 +329,7 @@ class SGNHT(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, A = 1., **kwargs):
-        super(SGNHT, self).__init__(kwargs)
+        super(SGNHT, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
         self.params['A'] = A
 
@@ -381,7 +387,7 @@ class mSGNHT(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, A=None, **kwargs):
-        super(SGNHT, self).__init__(kwargs)
+        super(SGNHT, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
         if A:
             self.params['A'] = A
@@ -443,7 +449,7 @@ class pSGLD(Trainer):
     '''
 
     def __init__(self, initial_lr=1.0e-5, alpha=0.99, mu=1.0e-5, use_gamma = False, **kwargs):
-        super(pSGLD, self).__init__(kwargs)
+        super(pSGLD, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
         self.params['mu'] = mu
         self.params['alpha'] = alpha
