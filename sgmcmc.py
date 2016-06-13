@@ -295,7 +295,7 @@ class SGFS(Trainer):
         I_t_next = (1 - self.lr) * self.I_t + self.lr * var_grads
 
         # compute noise
-        B_ch = slinalg.Cholesky(self.params['B'])
+        B_ch = slinalg.cholesky(self.params['B'])
         noise = tensor.dot(((2. / tensor.sqrt(lr)) * B_ch), 
                            trng.normal(grads.shape))
 
@@ -499,7 +499,7 @@ class pSGLD(Trainer):
             noise = tensor.sqrt(self.lr * G_t) * trng.normal(p.shape)
             if use_gamma:
                 # compute gamma
-                gamma = nlinalg.ExtractDiag()(tensor.jacobian(gt, p))
+                gamma = nlinalg.extract_diag(tensor.jacobian(gt, p))
                 updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g)) + gamma) + noise))
             else:
                 updates.append((p, p + 0.5 * self.lr * (gt * (gp + N * g)) + noise))
