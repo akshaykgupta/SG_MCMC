@@ -272,7 +272,6 @@ class SGFS(Trainer):
         prec_lik = self.params['prec_lik']
         prec_prior = self.params['prec_prior']
         gc_norm = self.params['gc_norm']
-        B = self.params['B']
         gamma = (n + N) / n
 
         # compute log-likelihood
@@ -295,12 +294,16 @@ class SGFS(Trainer):
         I_t_next = (1 - self.lr) * self.I_t + self.lr * var_grads
 
         # compute noise
-        B_ch = slinalg.cholesky(self.params['B'])
+        if 'B' in self.params:
+            B = self.params['B']
+        else:
+            B = gamma * I_t_next
+        B_ch = slinalg.cholesky(B)
         noise = tensor.dot(((2. / tensor.sqrt(lr)) * B_ch), 
                            trng.normal(grads.shape))
 
         # expensive inversion
-        inv_cond_mat = gamma * N * I_t_next + (4./self.lr) * self.params['B']
+        inv_cond_mat = gamma * N * I_t_next + (4./self.lr) * B
         cond_mat = nlinalg.matrix_inverse(inv_condition_mat)
 
         updates = []
