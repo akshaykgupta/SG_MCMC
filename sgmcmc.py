@@ -347,7 +347,7 @@ class SGNHT(Trainer):
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
-        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.shape),
+        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.get_value().shape),
                                                     dtype = theano.config.floatX))
                            for p in self.weights]
         self.kinetic_energy = theano.shared(self.params['A'],
@@ -406,10 +406,10 @@ class mSGNHT(Trainer):
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
-        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.shape),
+        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.get_value().shape),
                                                     dtype = theano.config.floatX))
                            for p in self.weights]
-        self.kinetic_energies = [theano.shared(self.params['A'],
+        self.kinetic_energies = [theano.shared(self.params['A'] * p.get_value(),
                                                dtype = theano.config.floatX)
                                  for p in self.weights]
 
@@ -469,7 +469,7 @@ class pSGLD(Trainer):
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar['lr']
-        self.V_t = [theano.shared(np.asarray(np.zeros(p.shape),
+        self.V_t = [theano.shared(np.asarray(np.zeros(p.get_value().shape),
                                              dtype = theano.config.floatX))
                     for p in self.weights]
 
