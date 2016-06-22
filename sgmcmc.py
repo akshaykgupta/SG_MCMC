@@ -347,11 +347,10 @@ class SGNHT(Trainer):
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
-        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.get_value().shape),
+        self.velocities = [theano.shared(np.asarray(np.random.randn(*p.get_value().shape),
                                                     dtype = theano.config.floatX))
                            for p in self.weights]
-        self.kinetic_energy = theano.shared(self.params['A'],
-                                            dtype = theano.config.floatX)
+        self.kinetic_energy = theano.shared(self.params['A'])
 
     def _get_updates(self):
         n = self.params['batch_size']
@@ -380,8 +379,8 @@ class SGNHT(Trainer):
             updates.append((p, p + self.lr * new_v))
             new_kinetic_energy += tensor.sum(tensor.sqr(new_v))
 
-        updates.append(self.kinetic_energy,
-                       self.kinetic_energy + ((new_kinetic_energy/n) - 1) * self.lr)
+        updates.append((self.kinetic_energy,
+                       self.kinetic_energy + ((new_kinetic_energy/n) - 1) * self.lr))
 
         return updates, sumloglik
 
@@ -398,19 +397,18 @@ class mSGNHT(Trainer):
            Diffusion matrix
     '''
 
-    def __init__(self, initial_lr=1.0e-5, A=None, **kwargs):
-        super(SGNHT, self).__init__(**kwargs)
+    def __init__(self, initial_lr=1.0e-5, A=1.0, **kwargs):
+        super(mSGNHT, self).__init__(**kwargs)
         self.params['lr'] = initial_lr
         if A:
             self.params['A'] = A
 
     def _create_auxiliary_variables(self):
         self.lr = tensor.scalar('lr')
-        self.velocities = [theano.shared(np.asarray(np.random.normal(*p.get_value().shape),
+        self.velocities = [theano.shared(np.asarray(np.random.randn(*p.get_value().shape),
                                                     dtype = theano.config.floatX))
                            for p in self.weights]
-        self.kinetic_energies = [theano.shared(self.params['A'] * p.get_value(),
-                                               dtype = theano.config.floatX)
+        self.kinetic_energies = [theano.shared(self.params['A'] * p.get_value())
                                  for p in self.weights]
 
     def _get_updates(self):
@@ -468,7 +466,7 @@ class pSGLD(Trainer):
         self.params['use_gamma'] = use_gamma
 
     def _create_auxiliary_variables(self):
-        self.lr = tensor.scalar['lr']
+        self.lr = tensor.scalar('lr')
         self.V_t = [theano.shared(np.asarray(np.zeros(p.get_value().shape),
                                              dtype = theano.config.floatX))
                     for p in self.weights]
@@ -501,14 +499,15 @@ class pSGLD(Trainer):
         grads_prior = tensor.grad(cost = logprior, wrt = self.weights)
 
         updates = []
-        [updates.append(v, v_n) for v, v_n in zip(self.V_t, V_t_next)]
+        [updates.append((v, v_n)) for v, v_n in zip(self.V_t, V_t_next)]
 
         for p, g, gp, gt in zip(self.weights, grads, grads_prior, G_t):
             # inject noise
-            noise = tensor.sqrt(self.lr * G_t) * trng.normal(p.shape)
+            noise = tensor.sqrt(self.lr * gt) * trng.normal(p.shape)
             if use_gamma:
                 # compute gamma
-                gamma = nlinalg.extract_diag(tensor.jacobian(gt, p))
+                gamma = nlinalg.extract_diag(tensor.jacobian(gt.flatten(), p).flatten(ndim=2))
+                gamma = gamma.reshape(p.shape)
                 updates.append((p, p + 0.5 * self.lr * ((gt * (gp + N * g)) + gamma) + noise))
             else:
                 updates.append((p, p + 0.5 * self.lr * (gt * (gp + N * g)) + noise))
